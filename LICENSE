@@ -5,3 +5,9 @@ as Perl itself (which is the Artistic license, or GPL v1 or above).
 This code is distributed in the hope that it will be useful,
 but without any warranty; without even the implied warranty
 of merchantability or fitness for a particular purpose.
+
+-
+
+The file Mysqlx.pm was generated from the .proto files at
+https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
+Since those are GPL v2, I think that makes Mysqlx.pm GPL v2.
