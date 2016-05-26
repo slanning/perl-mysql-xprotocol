@@ -1,15 +1,18 @@
 #!/usr/bin/env perl
+$0 = 'test-dynamic.pl';
 # https://dev.mysql.com/worklog/task/?id=8639
 use strict;
 use warnings;
+use autodie;
 use Data::Dumper; { package Data::Dumper; our ($Indent, $Sortkeys, $Terse, $Useqq) = (1)x4 }
-use List::Util qw/all/;
-use FindBin qw/$Bin/;
+use DBI;
 use Digest::SHA1;
+use Dumbbench;
+use Getopt::Long;
 use IO::Socket::INET qw//;
+use Term::ReadKey;
 
-#use Google::ProtocolBuffers::Dynamic;
-# This is how Mysqlx.pm was generated:
+# This is how Mysqlx.pm was generated (I think Google::ProtocolBuffers::Generated needs to be installed):
 # The .proto files were from:
 # https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
 # protoc --perl-gpd_out=package=Mysqlx,pb_prefix=Mysqlx,prefix=Mysqlx:lib --proto_path=/home/slanning/xprotocol /home/slanning/xprotocol/*.proto
@@ -39,43 +42,148 @@ my %NOTICE_TYPE = (
 # no idea if/where it's documented
 my $EXPECT_NO_ERROR = 1;
 
-my $USERNAME = 'test_user';
-my $PASSWORD = 'test_pass';
-my $HOSTNAME = 'localhost';
-my $PORT     = 33060;
-#my $DATABASE = 'sys';
-my $DATABASE = 'xproto';
-
 my $AUTHENTICATION_MECH_NAME = 'MYSQL41';
 my $BYTES_FIELD_SEPARATOR = "\0";
 
+my $COMPARE_WITH_OLDSCHOOL = 1;
+
+$|++;
+my $OPT = cli_params();
 main();
 exit;
 
 sub main {
     load_protobuf();
 
+    if ($OPT->{benchmark}) {
+        run_benchmark();
+    }
+    else {
+        my $host = $OPT->{hostname}->[0];
+        my $sock = make_socket($host, $OPT->{port});
+
+        #capabilities($sock);
+        authenticate_mysql41($sock);
+        #stmt_execute($sock);
+        #pipeline($sock);
+        #expect($sock);
+        #expect_pipeline($sock);
+        crud($sock);
+
+        $sock->close();
+    }
+}
+
+sub make_socket {
+    my ($host, $port) = @_;
+
     my $sock = IO::Socket::INET->new(
-        PeerHost => $HOSTNAME,
-        PeerPort => $PORT,
+        PeerHost => $host,
+        PeerPort => $port,
         Proto    => 'tcp',
     ) or die "Couldn't create socket: $!";
+    return $sock;
+}
 
-    #capabilities($sock);
-    authenticate_mysql41($sock);
-    #stmt_execute($sock);
-    pipeline($sock);
-    #expect($sock);
-    #expect_pipeline($sock);
-    #crud($sock);
+sub run_benchmark {
+    my $iterations          = 1000;
+    my $rejectoutliers      = 0;
 
-    $sock->close();
+    my $bench = Dumbbench->new(
+        target_rel_precision => 0.005,          # seek ~0.5%
+        initial_runs         => $iterations,    # the higher the more reliable
+        ($rejectoutliers) ? () : ( outlier_rejection => 1e9 ),
+    );
+
+    foreach my $host (@{ $OPT->{hostname} }) {
+        my $sock = make_socket($host, $OPT->{port});
+
+        authenticate_mysql41($sock);
+        
+        $bench->add_instances(
+            Dumbbench::Instance::PerlSub->new(
+                name => sprintf("%30s:%s", "pipeline", $host),
+                code => sub {
+                    my $result = test_cross_dc_pipeline($sock);
+                    1;
+                }
+            )
+            );
+        $bench->add_instances(
+            Dumbbench::Instance::PerlSub->new(
+                name => sprintf("%30s:%s", "non_pipelined", $host),
+                code => sub {
+                    my $result = test_cross_dc_non_pipelined($sock);
+                    1;
+                }
+            )
+        );
+        if ($COMPARE_WITH_OLDSCHOOL) {
+            my $dsn = "dbi:mysql:host=$host;database=$OPT->{database}";
+            my $dbh = DBI->connect($dsn, $OPT->{username}, $OPT->{password});
+            $dbh->{mysql_auto_reconnect} = 1;   # O.O
+    
+            $bench->add_instances(
+                Dumbbench::Instance::PerlSub->new(
+                    name => sprintf("%30s:%s", "DBD::mysql", $host),
+                    code => sub {
+                        my $result = test_cross_dc_oldschool($dbh);
+                        1;
+                    }
+                )
+            );
+        }
+    }
+
+
+    $bench->run;
+    # overridden to display "unscientific notation"
+    #$bench->report();
+    report($bench);
+}
+
+# modified from Dumbbench
+sub report {
+  my $self = shift;
+  my $raw = shift;
+  foreach my $instance ($self->instances) {
+    my $result = $instance->result;
+    my $str_result = unscientific_notation( $result );
+
+    if (not $raw) {
+      my $mean = $result->raw_number;
+      my $sigma = $result->raw_error->[0];
+      my $name = $instance->_name_prefix;
+      printf(
+        "%sRan %u iterations (%u outliers).\n",
+        $name,
+        scalar(@{$instance->timings}),
+        scalar(@{$instance->timings})-$result->nsamples
+      );
+      printf(
+        "%sRounded run time per iteration: %s (%.1f%%)\n",
+        $name,
+        "$str_result",
+        $sigma/$mean*100
+      );
+      if ($self->verbosity) {
+        printf("%sRaw:                            $mean +/- $sigma\n", $name);
+      }
+    }
+    else {
+      print $result, "\n";
+    }
+  }
+}
+
+sub unscientific_notation {
+    sprintf("%f %s %f", split(/ /, $_[0]));
 }
 
 sub crud {
     my ($sock) = @_;
 
-
+    die "implement me!";
 }
 
 sub expect_pipeline {
@@ -203,6 +311,116 @@ sub handle_stmt_execute {
     }
 }
 
+sub test_cross_dc_oldschool {
+    my ($dbh) = @_;
+
+    my @rows;
+    for (1 .. 100) {
+        my $id = 1 + int(rand(6));  # there are six rows in the table
+        my $row = $dbh->selectall_arrayref(
+            "select * from site_type where id = $id",
+        );
+        push @rows, $row->[0];
+    }
+
+    #print Dumper(\@rows) ;
+    #die sprintf("not enough rows (%s)", scalar(@rows)) unless @rows == $n;
+}
+
+sub test_cross_dc_non_pipelined {
+    my ($sock) = @_;
+
+    # FIXME:
+    my %scalar_type_by_name = reverse %SCALAR_TYPE;
+    my %any_type_by_name = reverse %ANY_TYPE;
+
+    my $n = 100;
+    for (1 .. $n) {
+        my $id = 1 + int(rand(6));  # there are six rows in the table
+        send_message_payload($sock, 'Mysqlx::Sql::StmtExecute', 'SQL_STMT_EXECUTE', {
+            stmt => "select * from site_type where id = $id",
+        });
+
+        handle_test_pipeline($sock, 1);
+    }
+}
+
+
+sub test_cross_dc_pipeline {
+    my ($sock) = @_;
+
+    # FIXME:
+    my %scalar_type_by_name = reverse %SCALAR_TYPE;
+    my %any_type_by_name = reverse %ANY_TYPE;
+
+    my $n = 100;
+    for (1 .. $n) {
+        my $id = 1 + int(rand(6));  # there are six rows in the table
+        send_message_payload($sock, 'Mysqlx::Sql::StmtExecute', 'SQL_STMT_EXECUTE', {
+            stmt => "select * from site_type where id = $id",
+        });
+    }
+
+    handle_test_pipeline($sock, $n);
+}
+
+sub handle_test_pipeline {
+    my ($sock, $n) = @_;
+
+    my $queries_received = 0;
+    my @column_metadata;
+    my @rows;
+    while (my $recv = receive_message($sock)) {
+        if (server_type_is('RESULTSET_COLUMN_META_DATA', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Resultset::ColumnMetaData', $recv->{payload});
+            print Dumper($decoded_payload) if $OPT->{debug};
+            # this could be further processed, esp. flags
+
+            push @column_metadata, $decoded_payload;
+        }
+        elsif (server_type_is('RESULTSET_ROW', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Resultset::Row', $recv->{payload});
+
+            my $row = $decoded_payload->get_field_list;
+            my $decoded_columns = _decode_columns($row, \@column_metadata);
+            print "DECODED FIELDS: ", Dumper($decoded_columns) if $OPT->{debug};
+            push @rows, $decoded_columns;
+        }
+        elsif (server_type_is('RESULTSET_FETCH_DONE', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Resultset::FetchDone', $recv->{payload});
+            # ...
+        }
+        elsif (server_type_is('NOTICE', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
+            print "Notice frame: ", Dumper($decoded_payload) if $OPT->{debug};
+            my $notice_payload = _decode_notice($decoded_payload);
+            print Dumper($notice_payload) if $OPT->{debug};
+        }
+        elsif (server_type_is('ERROR', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Error', $recv->{payload});
+            die "Server error (ERROR): ", Dumper($decoded_payload);
+        }
+        elsif (server_type_is('SQL_STMT_EXECUTE_OK', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Sql::StmtExecuteOk', $recv->{payload});
+            print "OK\n" if $OPT->{debug};
+
+            ++$queries_received;
+            @column_metadata = ();
+
+                print "queries_received==$n\n" if $OPT->{debug};
+            if ($queries_received >= $n) {
+                last;
+            }
+        }
+        else {
+            die "unknown message in stmt_execute";
+        }
+    }
+
+    print Dumper(\@rows) if $OPT->{debug};
+    die sprintf("not enough rows (%s)", scalar(@rows)) unless @rows == $n;
+}
+
 # FIXME: there's also a CapabilitiesSet
 sub capabilities {
     my ($sock) = @_;
@@ -237,21 +455,6 @@ sub capabilities {
 }
 
 sub load_protobuf {
-    # Note: this $protobuf stuff uses the *.proto files directly
-    # instead of the pre-generated .pm files
-
-    # my $protobuf = Google::ProtocolBuffers::Dynamic->new($Bin);
-
-    # my %proto_files = (
-    #     'mysqlx.proto' => { package => 'Mysqlx', prefix => 'Mysqlx' },
-    # );
-    # $proto_files{"mysqlx_$_.proto"} = { package => "Mysqlx.\u$_", prefix => "Mysqlx::\u$_" }
-    #   for qw/connection crud datatypes expect expr notice resultset session sql/;
-    #
-    # $protobuf->load_file($_) for keys %proto_files;
-    # $protobuf->map_package($_->{package} => $_->{prefix}) for values %proto_files;
-    # $protobuf->resolve_references();
-
     # FIXME: should make something more general to introspect all enums
     %FIELD_TYPE                           = _map_enum_id_to_name('Mysqlx::Resultset::ColumnMetaData', 'type');
     %SCALAR_TYPE                          = _map_enum_id_to_name('Mysqlx::Datatypes::Scalar', 'type');
@@ -640,6 +843,11 @@ sub _read_varint64 {
     return { length => ($pos - $offset), value => $result };
 }
 
+sub send_message_with_args {
+    my ($sock, $args) = @_;
+
+}
+
 sub send_message_stmt_execute {
     my ($sock) = @_;
 
@@ -696,7 +904,6 @@ sub authenticate_mysql41 {
     # sucks that there's not a message (class) to message_type mapping
     send_message_payload($sock, 'Mysqlx::Session::AuthenticateStart', 'SESS_AUTHENTICATE_START', {
         mech_name => $AUTHENTICATION_MECH_NAME,
-        # auth_data => $USERNAME,
     });
 
     # https://dev.mysql.com/doc/internals/en/x-protocol-authentication-mysql41-authentication.html
@@ -711,7 +918,7 @@ sub authenticate_mysql41 {
     if ($recv) {
         if (server_type_is('SESS_AUTHENTICATE_CONTINUE', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Session::AuthenticateContinue', $recv->{payload});
-            $response = _response_to_challenge($decoded_payload->{auth_data}, $USERNAME, $PASSWORD, $DATABASE);
+            $response = _response_to_challenge($decoded_payload->{auth_data}, $OPT->{username}, $OPT->{password}, $OPT->{database});
             send_message_payload($sock, 'Mysqlx::Session::AuthenticateContinue', 'SESS_AUTHENTICATE_CONTINUE', {
                 auth_data => $response,
             });
@@ -720,13 +927,15 @@ sub authenticate_mysql41 {
         }
         elsif (server_type_is('NOTICE', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
-            print "Notice frame: ", Dumper($decoded_payload);
+            print "Notice frame: ", Dumper($decoded_payload)
+              if $OPT->{debug};
 
             goto RECV;
         }
         elsif (server_type_is('SESS_AUTHENTICATE_OK', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Session::AuthenticateOk', $recv->{payload});
-            print "AuthenticateOk: ", Dumper($decoded_payload);
+            print "AuthenticateOk: ", Dumper($decoded_payload)
+              if $OPT->{debug};
         }
         elsif (server_type_is('ERROR', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Error', $recv->{payload});
@@ -783,7 +992,8 @@ sub _bytes_to_bits {
 sub send_message_object {
     my ($sock, $obj, $type) = @_;
 
-    print "send_message_object: ", Dumper({type => $type, obj => $obj});
+    print "send_message_object: ", Dumper({type => $type, obj => $obj})
+      if $OPT->{debug};
 
     my $class = ref($obj);
     my $payload = $class->encode($obj);
@@ -796,7 +1006,8 @@ sub send_message_payload {
     my ($sock, $message_class, $type, $payload) = @_;
     $payload //= {};
 
-    print "send_message_payload: $message_class $type ", Dumper($payload);
+    print "send_message_payload: $message_class $type ", Dumper($payload)
+      if $OPT->{debug};
 
     my $encoded_payload = $message_class->encode($payload);
     my $encoded_message = encode_message($type, $encoded_payload);
@@ -878,7 +1089,7 @@ sub receive_message {
         payload_length => bytes::length($payload),
         payload_hex    => _bytes_to_hex($payload),
     };
-    print "receive_message: ", Dumper($ret);
+#    print "receive_message: ", Dumper($ret);
     return $ret;
 }
 
@@ -971,4 +1182,88 @@ sub test_auth {
     my $got3 = substr($data3, 1 + length($username) + 1, 1 + 2*20);
     die("response should be hashed properly for hash 3")
         if $got3 ne $expected3;
+}
+
+sub cli_params {
+    my %opt;
+    $opt{'debug|D'}         = { default => 0,       type => '!'   };
+    $opt{'hostname|h'}      = { default => '',      type => ':s@' };
+    $opt{'username|u'}      = { default => '',      type => '=s'  };
+    $opt{'password|p'}      = { default => '',      type => ':s'  };
+    $opt{'database|d'}      = { default => '',      type => ':s'  };
+    $opt{'port|P'}          = { default => 33060,   type => ':i'  };
+    $opt{'benchmark|b'}     = { default => 0,       type => '!'   };
+    $opt{'authfile|f'}      = { default => '',      type => ':s'  };
+    $opt{help}              = { default => 0,       type => '|?'  };
+    $opt{man}               = { default => 0,       type => ''    };
+    GetOptions(
+        map {
+            ( "$_$opt{$_}{type}" => \ ($opt{$_} = $opt{$_}{default}) );    # attn: evil
+        } keys %opt
+    ) or pod2usage(2);
+    pod2usage(1) if $opt{help};
+    pod2usage(-exitstatus => 0, -verbose => 2) if $opt{man};
+
+    # get rid of shortcut
+    my $regex = qr/\|[a-zA-Z]$/;
+    foreach my $key (grep { $_ =~ $regex } keys %opt) {
+        (my $simple_key = $key) =~ s/$regex//;
+        $opt{$simple_key} = delete($opt{$key});
+    }
+
+    if ($opt{authfile}) {
+        # has to be exact
+        open(my $fh, $opt{authfile});
+        while (<$fh>) {
+            chomp;
+            my ($opt, $value) = split(/\A\s*([^\s=])+\s*=\s*([^\s=])+\s*$/);
+
+            if (defined($opt) and defined($value)) {
+                $opt{$opt} = $value
+                    unless defined($opt{$opt});
+            }
+            else {
+                die "opt? opt:$opt value:$value";
+            }
+        }
+        close($fh);
+    }
+
+    $opt{hostname} ||= 'localhost';
+
+    print "where is the payload?\n";
+    
+    unless ($opt{password}) {
+        $opt{password} = _get_password();
+    }
+
+    print "final: ", Dumper(\%opt);
+
+    return \%opt;
+}
+
+sub _get_password {
+    my $pass;
+
+    ReadMode(3);
+    while (ord(my $key = ReadKey(0)) != 10) {
+        if (ord($key) eq 8 || ord($key) == 127) {
+            chop($pass);
+            print "\b \b";
+        }
+        elsif (ord($key) < 32) {
+            # skip
+        }
+        else {
+            $pass .= $key;
+        }
+    }
+    ReadMode(0);
+
+    unless ($pass) {
+        print "\n";
+        exit;
+    }
+
+    return $pass;
 }

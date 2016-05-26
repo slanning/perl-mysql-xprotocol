@@ -1,2 +1,5 @@
 * CPAN module like the X DevAPI
 * integrate into DBD::mysql
+
+* API for placeholders
+* Getopt for auth info, etc.
