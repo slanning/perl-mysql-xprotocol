@@ -498,8 +498,6 @@ sub _decode_columns {
           unless exists $FIELD_TYPE{$type};
         my $type_name = $FIELD_TYPE{$type};
 
-        #print $col_meta->{name}, "\t$type_name:\t", Dumper($col);
-
         # FIXME: float and double don't display the right number of decimal places
         # example float: -43.390998840332 instead of -43.391
         # I know floats are like that but the mysql client displays it correctly...
@@ -1102,7 +1100,8 @@ sub receive_message {
         payload_length => bytes::length($payload),
         payload_hex    => _bytes_to_hex($payload),
     };
-#    print "receive_message: ", Dumper($ret);
+    print "receive_message: ", Dumper($ret)
+      if $OPT->{debug};
     return $ret;
 }
 
