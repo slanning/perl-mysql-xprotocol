@@ -99,7 +99,7 @@ sub run_benchmark {
         my $sock = make_socket($host, $OPT->{port});
 
         authenticate_mysql41($sock);
-        
+
         $bench->add_instances(
             Dumbbench::Instance::PerlSub->new(
                 name => sprintf("%30s:%s", "pipeline", $host),
@@ -122,7 +122,7 @@ sub run_benchmark {
             my $dsn = "dbi:mysql:host=$host;database=$OPT->{database}";
             my $dbh = DBI->connect($dsn, $OPT->{username}, $OPT->{password});
             $dbh->{mysql_auto_reconnect} = 1;   # O.O
-    
+
             $bench->add_instances(
                 Dumbbench::Instance::PerlSub->new(
                     name => sprintf("%30s:%s", "DBD::mysql", $host),
