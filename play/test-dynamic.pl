@@ -64,11 +64,11 @@ sub main {
 
         #capabilities($sock);
         authenticate_mysql41($sock);
-        #stmt_execute($sock);
+        stmt_execute($sock);
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
-        crud($sock);
+        #crud($sock);
 
         $sock->close();
     }
@@ -261,9 +261,9 @@ sub pipeline {
 }
 
 sub handle_stmt_execute {
-    my ($sock) = @_;
+    my ($sock, $number_queries) = @_;
 
-    my $queries_received = 0;
+    my $resultsets_received = 0;
     my @column_metadata;
     while (my $recv = receive_message($sock)) {
         # FIXME: need to improve this..
@@ -300,10 +300,10 @@ sub handle_stmt_execute {
             my $decoded_payload = decode_payload('Mysqlx::Sql::StmtExecuteOk', $recv->{payload});
             print "OK\n";
 
-            ++$queries_received;
+            ++$resultsets_received;
             @column_metadata = ();
 
-            last if $queries_received >= 2;
+            last if $resultsets_received >= $number_queries;
         }
         else {
             die "unknown message in stmt_execute";
@@ -843,55 +843,68 @@ sub _read_varint64 {
     return { length => ($pos - $offset), value => $result };
 }
 
-sub send_message_with_args {
-    my ($sock, $args) = @_;
+sub encode_stmt_args {
+    my ($args) = @_;
 
+    #my %scalar_type_by_name = reverse %SCALAR_TYPE;
+    my %any_type_by_name = reverse %ANY_TYPE;
+
+    my @encoded;
+
+    foreach my $arg (@$args) {
+        # mysqlx_datatypes.proto
+        my ($type, $field, $val);
+        if (defined($arg)) {
+            $type  = 8;      # V_STRING
+            $field = 'v_string';
+            $val   = Mysqlx::Datatypes::Scalar::String->new({
+                value => "$arg",
+            });
+        }
+        else {
+            $type  = 3;      # V_NULL
+            $field = undef;
+        }
+        my $scalar  = Mysqlx::Datatypes::Scalar->new({
+            type => $type,
+            (defined($field) ? ($field => $val) : ()),
+        });
+        my $any = Mysqlx::Datatypes::Any->new({
+            type => $any_type_by_name{SCALAR},
+            scalar => $scalar,
+        });
+
+        push @encoded, $any;
+    }
+
+    return \@encoded;
 }
 
 sub send_message_stmt_execute {
     my ($sock) = @_;
 
-    # FIXME:
-    my %scalar_type_by_name = reverse %SCALAR_TYPE;
-    my %any_type_by_name = reverse %ANY_TYPE;
-
     # FIXME: how to deal with string vs number? (maybe a parameter; here V_UINT and v_unsigned_int are hardcoded)
-    my @id = (1234567890, 234567890);
-    my @scalar = map(Mysqlx::Datatypes::Scalar->new({type => $scalar_type_by_name{V_UINT}, v_unsigned_int => $_}), @id);
-    my @args = map(Mysqlx::Datatypes::Any->new({type => $any_type_by_name{SCALAR}, scalar => $_}), @scalar);
+    my $args = encode_stmt_args([1234567890, 234567890]);
 
     # FIXME: test SQL error and so on
 
     my $stmtexec = Mysqlx::Sql::StmtExecute->new({
         stmt => "select * from field_test where my_int_u in (?, ?)",
-        # using aref works for 'repeated'! (can also use add_args as below)
-        args => \@args,
+        # using aref works for 'repeated'! (can also use add_args)
+        args => $args,
 
         # namespace => 'bleh',
         # compact_metadata => 0,
     });
-    #$stmtexec->add_args($_) for @args;
 
-    if (@args) {
-        send_message_object($sock, $stmtexec, 'SQL_STMT_EXECUTE');
-    }
-    else {
-        # FIXME: I think this can use send_message_object and just not pass args
-        send_message_payload($sock, 'Mysqlx::Sql::StmtExecute', 'SQL_STMT_EXECUTE', {
-            # stmt => "SELECT *, 1, 1.1, -1, -1.1, 'hello', NULL, NOW() FROM sys_config",
-            stmt => "select * from field_test",
-            # namespace => 'bleh',
-            # compact_metadata => 0,
-        });
-    }
-
+    send_message_object($sock, $stmtexec, 'SQL_STMT_EXECUTE');
 }
 
 sub stmt_execute {
     my ($sock) = @_;
 
     send_message_stmt_execute($sock);
-    handle_stmt_execute($sock);
+    handle_stmt_execute($sock, 1);
 
     print "done with stmt_execute\n";
 }
@@ -1229,15 +1242,11 @@ sub cli_params {
         close($fh);
     }
 
-    $opt{hostname} ||= 'localhost';
+    $opt{hostname} ||= [ 'localhost' ];
 
-    print "where is the payload?\n";
-    
     unless ($opt{password}) {
         $opt{password} = _get_password();
     }
-
-    print "final: ", Dumper(\%opt);
 
     return \%opt;
 }
@@ -1266,4 +1275,40 @@ sub _get_password {
     }
 
     return $pass;
+}
+
+
+
+__END__
+
+sub encode_stmt_arg {
+    my ($arg, $typename) = @_;
+    $typename //= 'V_UINT';  # ?
+
+    my %scalar_type_by_name = reverse %SCALAR_TYPE;
+    my %any_type_by_name    = reverse %ANY_TYPE;
+
+    # convenience shortcuts
+    $typename = 'V_' . $typename unless $typename =~ /^V_/;
+    $typename = uc($typename);
+    $typename = 'V_NULL' unless defined $arg;
+    my $type = $scalar_type_by_name{$typename};
+
+    my $field_name;
+    unless ($typename eq 'V_NULL') {
+        my $class = ref($scalar);
+        my $md = $class->message_descriptor;
+        my $value_field = $md->find_field_by_number($type + 1);
+        $field_name = $value_field->name;
+    }
+    my $scalar  = Mysqlx::Datatypes::Scalar->new({
+        type => $type,
+        ($field_name ? ($field_name => $arg) : ()),
+    });
+    my $any = Mysqlx::Datatypes::Any->new({
+        type => $any_type_by_name{SCALAR},
+        scalar => $scalar,
+    });
+
+    return $any;
 }
