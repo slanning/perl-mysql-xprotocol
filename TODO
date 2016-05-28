@@ -1,5 +1,4 @@
-* CPAN module like the X DevAPI
+* CPAN module like the X DevAPI ( mysql-connector-nodejs/lib/DevAPI/ )
 * integrate into DBD::mysql
-
-* API for placeholders
-* Getopt for auth info, etc.
+* API for placeholders - we assume String arguments, maybe it's good enough for now
+* Perl support in MySQL shell

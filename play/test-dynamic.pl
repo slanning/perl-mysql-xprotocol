@@ -64,14 +64,21 @@ sub main {
 
         #capabilities($sock);
         authenticate_mysql41($sock);
-        stmt_execute($sock);
+        #stmt_execute($sock);
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
-        #crud($sock);
+        crud($sock);
 
         $sock->close();
     }
+}
+
+
+sub crud {
+    my ($sock) = @_;
+
+    die "implement me!";
 }
 
 sub make_socket {
@@ -180,12 +187,6 @@ sub unscientific_notation {
     sprintf("%f %s %f", split(/ /, $_[0]));
 }
 
-sub crud {
-    my ($sock) = @_;
-
-    die "implement me!";
-}
-
 sub expect_pipeline {
     my ($sock) = @_;
 
@@ -195,7 +196,7 @@ sub expect_pipeline {
     };
 
     expect($sock, $callback);
-    handle_stmt_execute($sock);
+    handle_stmt_execute($sock, 2);
 }
 
 sub handle_expect {
@@ -216,9 +217,9 @@ sub handle_expect {
         }
         elsif (server_type_is('NOTICE', $type)) {
             my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
-            print "Notice frame: ", Dumper($decoded_payload);
+            print "Notice frame: ", Dumper($decoded_payload) if $OPT->{debug};
             my $notice_payload = _decode_notice($decoded_payload);
-            print Dumper($notice_payload);
+            print Dumper($notice_payload) if $OPT->{debug};
         }
         else {
             die "unhandled Expect message '$type'";
@@ -257,7 +258,7 @@ sub pipeline {
     # How do you properly distinguish what's returned by the server?
     # Otherwise, it's handled the same.
 
-    handle_stmt_execute($sock);
+    handle_stmt_execute($sock, 2);
 }
 
 sub handle_stmt_execute {
@@ -270,7 +271,7 @@ sub handle_stmt_execute {
 
         if (server_type_is('RESULTSET_COLUMN_META_DATA', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Resultset::ColumnMetaData', $recv->{payload});
-            print Dumper($decoded_payload);
+            print Dumper($decoded_payload) if $OPT->{debug};
             # this could be further processed, esp. flags
 
             push @column_metadata, $decoded_payload;
@@ -280,7 +281,7 @@ sub handle_stmt_execute {
 
             my $row = $decoded_payload->get_field_list;
             my $decoded_columns = _decode_columns($row, \@column_metadata);
-            print "DECODED FIELDS: ", Dumper($decoded_columns);
+            print "DECODED FIELDS: ", Dumper($decoded_columns) if $OPT->{debug};
         }
         elsif (server_type_is('RESULTSET_FETCH_DONE', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Resultset::FetchDone', $recv->{payload});
@@ -288,9 +289,9 @@ sub handle_stmt_execute {
         }
         elsif (server_type_is('NOTICE', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
-            print "Notice frame: ", Dumper($decoded_payload);
+            print "Notice frame: ", Dumper($decoded_payload) if $OPT->{debug};
             my $notice_payload = _decode_notice($decoded_payload);
-            print Dumper($notice_payload);
+            print Dumper($notice_payload) if $OPT->{debug};
         }
         elsif (server_type_is('ERROR', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Error', $recv->{payload});
@@ -298,7 +299,7 @@ sub handle_stmt_execute {
         }
         elsif (server_type_is('SQL_STMT_EXECUTE_OK', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Sql::StmtExecuteOk', $recv->{payload});
-            print "OK\n";
+            print "OK\n" if $OPT->{debug};
 
             ++$resultsets_received;
             @column_metadata = ();
@@ -938,8 +939,9 @@ sub authenticate_mysql41 {
         }
         elsif (server_type_is('NOTICE', $recv->{type})) {
             my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
-            print "Notice frame: ", Dumper($decoded_payload)
-              if $OPT->{debug};
+            print "Notice frame: ", Dumper($decoded_payload) if $OPT->{debug};
+            my $notice_payload = _decode_notice($decoded_payload);
+            print Dumper($notice_payload) if $OPT->{debug};
 
             goto RECV;
         }
