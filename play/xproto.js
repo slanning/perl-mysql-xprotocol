@@ -4,6 +4,7 @@
 // and did the myColl.add(...) calls (need to use existsInDatabase I think)
 
 // http://dev.mysql.com/doc/x-devapi-userguide/en/devapi-users-introduction.html
+// http://dev.mysql.com/worklog/task/?id=8338
 
 var mysqlx = require('mysqlx').mysqlx;
 
@@ -80,6 +81,7 @@ var myColl = myDb.getCollection(coll_name);
 // named :params are only allowed in CRUD ops (one .bind() per param); name must not begin with a digit
 // ? placeholders only in (nodesession) .sql() strings
 myDocs = myColl.find('col1 = :param').bind('param', 3).execute();
+
 // COLLECTION methods
 // http://dev.mysql.com/doc/x-devapi-userguide/en/collection-crud-function-overview.html  for syntax diagrams
 // add   (binding doesn't work for add)

@@ -10,6 +10,7 @@ use Digest::SHA1;
 use Dumbbench;
 use Getopt::Long;
 use IO::Socket::INET qw//;
+use JSON qw//;
 use Term::ReadKey;
 
 # This is how Mysqlx.pm was generated (I think Google::ProtocolBuffers::Generated needs to be installed):
@@ -47,6 +48,8 @@ my $BYTES_FIELD_SEPARATOR = "\0";
 
 my $COMPARE_WITH_OLDSCHOOL = 1;
 
+my $JSON = JSON->new();
+
 $|++;
 my $OPT = cli_params();
 main();
@@ -68,17 +71,224 @@ sub main {
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
-        crud($sock);
+        #crud_find($sock);
+        #crud_insert($sock);
+        #crud_update($sock);
+        crud_delete($sock);
 
         $sock->close();
     }
 }
 
-
-sub crud {
+sub crud_find {
     my ($sock) = @_;
 
-    die "implement me!";
+    my $collection = Mysqlx::Crud::Collection->new({
+        name   => $OPT->{collection},
+        schema => $OPT->{database},
+    });
+    my $data_model = Mysqlx::Crud::DataModel::DOCUMENT;
+    my @projection = (
+        Mysqlx::Crud::Projection->new({
+            source => Mysqlx::Expr::Expr->new({
+                type => Mysqlx::Expr::Expr::Type::IDENT,
+                identifier => Mysqlx::Expr::ColumnIdentifier->new({
+                    document_path => [
+                        Mysqlx::Expr::DocumentPathItem->new({
+                            type => Mysqlx::Expr::DocumentPathItem::Type::MEMBER_ASTERISK,
+                            value => '.*',
+                        }),
+                    ],
+                    # name => ???
+                    # table_name => $OPT->{collection},
+                    # schema_name => $OPT->{database},
+                }),
+            }),
+            alias => 'param0',  # required for DOCUMENTs
+        }),
+    );
+    # N.B. message Expr has the fields out of order w.r.t. Type enum...
+    # I can't figure out how to do criteria (WHERE) yet
+    #my $criteria = Mysqlx::Expr::Expr->new({
+    #    # VARIABLE isn't supported yet
+    #    # type => Mysqlx::Expr::Expr::Type::VARIABLE,
+    #    # variable => 'col1 = :param0',
+    #
+    #});
+    #my @args = (
+    #    # FIXME: could use a general Scalar encoder
+    #    Mysqlx::Datatypes::Scalar->new({
+    #        type => Mysqlx::Datatypes::Scalar::Type::V_UINT,
+    #        v_unsigned_int => 3,
+    #    }),
+    #);
+
+    my $find = Mysqlx::Crud::Find->new({
+        collection => $collection,
+        data_model => $data_model,
+        projection => \@projection,
+        # criteria   => $criteria,
+        # args       => \@args,
+        # limit, order, grouping, grouping_criteria
+    });
+
+    send_message_object($sock, $find, 'CRUD_FIND');
+    handle_stmt_execute($sock, 1);
+}
+
+sub crud_insert {
+    my ($sock) = @_;
+
+    my $collection = Mysqlx::Crud::Collection->new({
+        name   => $OPT->{collection},
+        schema => $OPT->{database},
+    });
+    my $data_model = Mysqlx::Crud::DataModel::DOCUMENT;
+    #my @projection = (
+    #    Mysqlx::Crud::Column->new({
+    #        #name => 'col4',
+    #        #alias
+    #        document_path => [
+    #            Mysqlx::Expr::DocumentPathItem->new({
+    #                type => Mysqlx::Expr::DocumentPathItem::Type::MEMBER,
+    #                value => '.col4',
+    #            }),
+    #        ],
+    #    }),
+    #);
+    my @data = (
+        {
+            _id => _id_generator(),   # _id is *required*
+            col1 => 5, colx => 12,
+        },
+    );
+    my @row = map {
+        my $str = $JSON->encode($_);
+
+        print "JSON: $str\n";
+
+        Mysqlx::Crud::Insert::TypedRow->new({
+            field => [
+                Mysqlx::Expr::Expr->new({
+                    type => Mysqlx::Expr::Expr::Type::LITERAL,
+                    literal => Mysqlx::Datatypes::Scalar->new({
+                        type => Mysqlx::Datatypes::Scalar::Type::V_STRING,
+                        v_string => Mysqlx::Datatypes::Scalar::String->new({
+                            value => "$str",
+                        }),
+                    }),
+                }),
+            ],
+        });
+    } @data;
+
+    my $insert = Mysqlx::Crud::Insert->new({
+        collection => $collection,
+        data_model => $data_model,
+        #projection => \@projection,
+        row        => \@row,
+        # args       => \@args,
+    });
+
+    send_message_object($sock, $insert, 'CRUD_INSERT');
+    handle_stmt_execute($sock, 1);
+}
+
+# copied this from nodejs (if I implemented crypto.randomBytes correctly..)
+sub _id_generator {
+    return join('-', map(
+                    _bytes_to_hex(
+                        pack("C$_", map(int(rand(256)), 1 .. $_))
+                    ),
+                    4, 2, 2, 2, 4));
+}
+
+sub crud_update {
+    my ($sock) = @_;
+
+    my $collection = Mysqlx::Crud::Collection->new({
+        name   => $OPT->{collection},
+        schema => $OPT->{database},
+    });
+    my $data_model = Mysqlx::Crud::DataModel::DOCUMENT;
+    my $update_value = $JSON->encode({ col9 => 999 });
+    my @operation = (
+        Mysqlx::Crud::UpdateOperation->new({
+            source => Mysqlx::Expr::ColumnIdentifier->new({
+                document_path => [
+                    Mysqlx::Expr::DocumentPathItem->new({
+                        type => Mysqlx::Expr::DocumentPathItem::Type::MEMBER,
+                        value => '.col9',
+                    }),
+                ],
+            }),
+            # FIXME quite weird result...
+            operation => Mysqlx::Crud::UpdateOperation::UpdateType::ITEM_MERGE,
+            value => Mysqlx::Expr::Expr->new({
+                type => Mysqlx::Expr::Expr::Type::LITERAL,
+                literal => Mysqlx::Datatypes::Scalar->new({
+                    type => Mysqlx::Datatypes::Scalar::Type::V_STRING,
+                    v_string => Mysqlx::Datatypes::Scalar::String->new({
+                        value => $update_value,
+                    }),
+                }),
+            }),
+        }),
+    );
+
+    my $update = Mysqlx::Crud::Update->new({
+        collection => $collection,
+        data_model => $data_model,
+        # criteria   => $criteria,
+        # args       => \@args,
+        # limit
+        # order
+        operation => \@operation,
+    });
+
+    send_message_object($sock, $update, 'CRUD_UPDATE');
+    handle_stmt_execute($sock, 1);
+}
+
+sub crud_delete {
+    my ($sock) = @_;
+
+    my $collection = Mysqlx::Crud::Collection->new({
+        name   => $OPT->{collection},
+        schema => $OPT->{database},
+    });
+    my $data_model = Mysqlx::Crud::DataModel::DOCUMENT;
+
+    my $delete_value = $JSON->encode({ colx => 12 });
+    my $criteria = Mysqlx::Expr::Expr->new({
+        type => Mysqlx::Expr::Expr::Type::LITERAL,
+        literal => Mysqlx::Datatypes::Scalar->new({
+            type => Mysqlx::Datatypes::Scalar::Type::V_STRING,
+            v_string => Mysqlx::Datatypes::Scalar::String->new({
+                value => $delete_value,
+            }),
+        }),
+    });
+
+    # "msg" => "Truncated incorrect INTEGER value: '{\"colx\":12}'",
+
+    # FIXME: criteria can't be ignored any more,
+    # since all Documents will be deleted...
+    # but I don't see how to do it.
+    # nodejs seems to parse Expressions in lib/Expressions/parser.js
+    # which seems absurdly ridiculous..
+
+    my $delete = Mysqlx::Crud::Delete->new({
+        collection => $collection,
+        data_model => $data_model,
+        criteria   => $criteria,
+        # args       => \@args,
+        # limit
+        # order
+    });
+
+    send_message_object($sock, $delete, 'CRUD_DELETE');
+    handle_stmt_execute($sock, 1);
 }
 
 sub make_socket {
@@ -1200,6 +1410,7 @@ sub test_auth {
 
 sub cli_params {
     my %opt;
+
     $opt{'debug|D'}         = { default => 0,       type => '!'   };
     $opt{'hostname|h'}      = { default => '',      type => ':s@' };
     $opt{'username|u'}      = { default => '',      type => '=s'  };
@@ -1208,6 +1419,8 @@ sub cli_params {
     $opt{'port|P'}          = { default => 33060,   type => ':i'  };
     $opt{'benchmark|b'}     = { default => 0,       type => '!'   };
     $opt{'authfile|f'}      = { default => '',      type => ':s'  };
+    $opt{'collection|c'}    = { default => '',      type => ':s'  };
+
     $opt{help}              = { default => 0,       type => '|?'  };
     $opt{man}               = { default => 0,       type => ''    };
     GetOptions(
