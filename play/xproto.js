@@ -98,8 +98,13 @@ myDocs = myColl.find('col1 = :param').bind('param', 3).execute();
 // count()
 
 // http://dev.mysql.com/doc/x-devapi-userguide/en/working-with-data-sets.html
-print(myDocs.fetchOne());    // there's also fetchAll(); "Connectors implementing the X DevAPI can offer more advanced iteration patterns"
-print(myDocs.fetchOne());    // "When the last data item has been read and fetchOne() is called again a NULL value is returned."
+// print(myDocs.fetchOne());    // there's also fetchAll(); "Connectors implementing the X DevAPI can offer more advanced iteration patterns"
+// print(myDocs.fetchOne());    // "When the last data item has been read and fetchOne() is called again a NULL value is returned."
+
+var myResult = myDocs.fetchAll();
+for (i in myResult) {
+    print(myResult[i]); print("\n");
+}
 
 // http://dev.mysql.com/doc/x-devapi-userguide/en/fetching-all-data-items-at-once.html
 // "Asynchronous query executions return control to caller once a query has been issued and prior to receiving any reply from the server. Calling fetchAll() to read the data items produced by an asynchronous query execution may block the caller. fetchAll() cannot return control to the caller before reading results from the server is finished."
