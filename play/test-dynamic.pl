@@ -71,14 +71,49 @@ sub main {
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
-        #crud_find($sock);
+        crud_find($sock);
         #crud_insert($sock);
         #crud_update($sock);
-        crud_delete($sock);
+        #crud_delete($sock);
 
         $sock->close();
     }
 }
+
+# I straced what mysqlsh sent to the server when I did:
+#   myDocs = myColl.find('col1 = :param').bind('param', 3).execute();
+# Using the binary string in the strace, I dumpered it
+# and found some embedded objects missing..
+# Mattia found it's a bug and showed me this cool usage of protoc:
+# $ perl -E 'my $send = "\22\31\n\17test_collection\22\6xproto\30\1*\36\10\0052\32\n\2==\22\16\10\1\22\n\n\10\10\1\22\4col1\22\4\10\0068\0Z\4\10\1\20\6"; print $send' | protoc --decode=Mysqlx.Crud.Find -I. ./mysqlx_crud.proto
+# collection {
+#   name: "test_collection"
+#   schema: "xproto"
+# }
+# data_model: DOCUMENT
+# criteria {
+#   type: OPERATOR
+#   operator {
+#     name: "=="
+#     param {
+#       type: IDENT
+#       identifier {
+#         document_path {
+#           type: MEMBER
+#           value: "col1"
+#         }
+#       }
+#     }
+#     param {
+#       type: PLACEHOLDER
+#       position: 0
+#     }
+#   }
+# }
+# args {
+#   type: V_SINT
+#   v_signed_int: 3
+# }
 
 sub crud_find {
     my ($sock) = @_;
@@ -107,28 +142,43 @@ sub crud_find {
             alias => 'param0',  # required for DOCUMENTs
         }),
     );
-    # N.B. message Expr has the fields out of order w.r.t. Type enum...
-    # I can't figure out how to do criteria (WHERE) yet
-    #my $criteria = Mysqlx::Expr::Expr->new({
-    #    # VARIABLE isn't supported yet
-    #    # type => Mysqlx::Expr::Expr::Type::VARIABLE,
-    #    # variable => 'col1 = :param0',
-    #
-    #});
-    #my @args = (
-    #    # FIXME: could use a general Scalar encoder
-    #    Mysqlx::Datatypes::Scalar->new({
-    #        type => Mysqlx::Datatypes::Scalar::Type::V_UINT,
-    #        v_unsigned_int => 3,
-    #    }),
-    #);
+    # This is how you say "WHERE col1 = ?" with bind value 3
+    my $criteria = Mysqlx::Expr::Expr->new({
+        type => Mysqlx::Expr::Expr::Type::OPERATOR,
+        operator => Mysqlx::Expr::Operator->new({
+            name => '==',
+            param => [
+                Mysqlx::Expr::Expr->new({
+                    type => Mysqlx::Expr::Expr::Type::IDENT,
+                    identifier => Mysqlx::Expr::ColumnIdentifier->new({
+                        document_path => [
+                            Mysqlx::Expr::DocumentPathItem->new({
+                                type => Mysqlx::Expr::DocumentPathItem::Type::MEMBER,
+                                value => 'col1',
+                            }),
+                        ],
+                    }),
+                }),
+                Mysqlx::Expr::Expr->new({
+                    type => Mysqlx::Expr::Expr::Type::PLACEHOLDER,
+                    position => 0,
+                }),
+            ],
+        }),
+    });
+    my @args = (
+        Mysqlx::Datatypes::Scalar->new({
+            type => Mysqlx::Datatypes::Scalar::Type::V_UINT,
+            v_unsigned_int => 3,
+        }),
+    );
 
     my $find = Mysqlx::Crud::Find->new({
         collection => $collection,
         data_model => $data_model,
         projection => \@projection,
-        # criteria   => $criteria,
-        # args       => \@args,
+        criteria   => $criteria,
+        args       => \@args,
         # limit, order, grouping, grouping_criteria
     });
 
@@ -421,7 +471,7 @@ sub handle_expect {
         }
         elsif (server_type_is('OK', $type)) {
             my $decoded_payload = decode_payload('Mysqlx::Ok', $recv->{payload});
-            print "OK\n";
+            print "OK\n" if $OPT->{debug};
             $ok = 1;
             last;
         }
@@ -475,6 +525,7 @@ sub handle_stmt_execute {
     my ($sock, $number_queries) = @_;
 
     my $resultsets_received = 0;
+    my $rows_received = 0;
     my @column_metadata;
     while (my $recv = receive_message($sock)) {
         # FIXME: need to improve this..
@@ -491,6 +542,7 @@ sub handle_stmt_execute {
 
             my $row = $decoded_payload->get_field_list;
             my $decoded_columns = _decode_columns($row, \@column_metadata);
+            ++$rows_received;
             print "DECODED FIELDS: ", Dumper($decoded_columns) if $OPT->{debug};
         }
         elsif (server_type_is('RESULTSET_FETCH_DONE', $recv->{type})) {
@@ -514,7 +566,10 @@ sub handle_stmt_execute {
             ++$resultsets_received;
             @column_metadata = ();
 
-            last if $resultsets_received >= $number_queries;
+            if ($resultsets_received >= $number_queries) {
+                printf("Received %s rows\n", $rows_received) if $OPT->{debug};
+                last;
+            }
         }
         else {
             die "unknown message in stmt_execute";
