@@ -1,0 +1,20 @@
+Usage of the protocol
+
+ * example client-server messages
+
+ * AUTHENTICATE
+
+  Client --> Server:  Session::AuthenticateStart
+  Client <-- Server:  Session::AuthenticateContinue
+  Client <-- Server:  Notice::Frame (CLIENT_ID_ASSIGNED)
+  Client --> Server:  Session::AuthenticateContinue
+  Client <-- Server:  Session::AuthenticateOk
+
+ * SELECT
+
+  Client --> Server:  Sql::StmtExecute
+  Client <-- Server:  Resultset::ColumnMetaData (each column)
+  Client <-- Server:  Resultset::Row (each row)
+  Client <-- Server:  Resultset::FetchDone
+  Client <-- Server:  Notice::Frame (ROWS_AFFECTED)
+  Client <-- Server:  Sql::StmtExecuteOk

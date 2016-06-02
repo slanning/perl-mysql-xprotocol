@@ -1,0 +1,11 @@
+Experimenting with the MySQL X Protocol
+
+ * Context
+
+ * Usage of the protocol
+
+ * Pipelining benchmark
+
+ * Plans
+
+ * Links

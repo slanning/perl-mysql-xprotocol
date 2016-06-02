@@ -1,0 +1,7 @@
+Possible personal Perl plans
+
+ * X Protocol module --> X DevAPI
+
+ * DBI integration
+
+ * mysqlsh Perl support

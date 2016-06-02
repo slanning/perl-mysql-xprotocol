@@ -1,0 +1,18 @@
+Usage of the protocol
+
+ * .proto files specify Message structure/datatypes
+
+ * examples:
+
+  message AuthenticateStart {
+    required string mech_name = 1;
+    optional bytes auth_data = 2;
+    optional bytes initial_response = 3;
+  }
+
+ message StmtExecute {
+   optional string namespace = 3 [ default = "sql" ];
+   required bytes stmt = 1;
+   repeated Mysqlx.Datatypes.Any args = 2;
+   optional bool compact_metadata = 4 [ default = false ];
+ }

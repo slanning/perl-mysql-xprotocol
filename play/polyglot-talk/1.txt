@@ -1,0 +1,7 @@
+Context
+
+ * introduced in MySQL 5.7.12
+
+ * meant as a foundation for future features
+
+ * asynchronous API, pipelining

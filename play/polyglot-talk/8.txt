@@ -1,0 +1,16 @@
+More info
+
+* 6-part blog series at http://mysqlserverteam.com/
+
+* MySQL Internals Manual
+  https://dev.mysql.com/doc/internals/en/x-protocol.html
+
+* https://dev.mysql.com/worklog/task/?id=8639
+
+* http://dev.mysql.com/doc/x-devapi-userguide/en/devapi-users-introduction.html
+
+* .proto files location
+  https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
+
+* unusable code
+  https://github.com/slanning/perl-mysql-xprotocol

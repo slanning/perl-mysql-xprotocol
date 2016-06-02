@@ -1,0 +1,22 @@
+Usage of the protocol
+
+ * protoc compiler generates code
+
+ * for Perl: Google::ProtocolBuffers::Dynamic
+
+  protoc -I. ./*.proto  \
+   --perl-gpd_out=package=Mysqlx,pb_prefix=Mysqlx,prefix=Mysqlx:lib
+
+
+ * example:
+
+  $obj = Mysqlx::Session::AuthenticateStart->new({
+      mech_name => 'MYSQL41'
+  });
+  $payload = Mysqlx::Session::AuthenticateStart->encode($obj);
+  $msg = $len . $type . $payload;
+
+  $sock->send($msg);
+
+  $sock->read($buf, 5);
+  $sock->read($payload, $len - 1);

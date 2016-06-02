@@ -1,0 +1,22 @@
+Pipelining benchmark
+
+ * 100 SELECTs by primary key
+
+ * benchmark results:
+
+  CROSS-DC
+
+      pipelined:   59ms
+  non-pipelined:  982ms
+            DBI: 1248ms
+
+  SAME DC
+
+      pipelined:   44ms
+  non-pipelined:   89ms
+            DBI:   34ms
+
+
+* cross-DC: pipelined much faster than non-pipelined
+
+* same DC: DBI still fastest

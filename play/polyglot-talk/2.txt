@@ -1,0 +1,9 @@
+Usage of the protocol
+
+ * mysql> install plugin mysqlx soname 'mysqlx.so'; ...
+
+ * port 33060
+
+ * Message: 4-byte length, 1-byte Message type, payload
+
+ * payload is a Google Protocol Buffer
