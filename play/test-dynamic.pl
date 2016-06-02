@@ -67,11 +67,11 @@ sub main {
 
         #capabilities($sock);
         authenticate_mysql41($sock);
-        #stmt_execute($sock);
+        stmt_execute($sock);
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
-        crud_find($sock);
+        #crud_find($sock);
         #crud_insert($sock);
         #crud_update($sock);
         #crud_delete($sock);
@@ -1272,6 +1272,8 @@ sub send_message_object {
 
     print "send_message_object: ", Dumper({type => $type, obj => $obj})
       if $OPT->{debug};
+
+    # optimization: https://dev.mysql.com/doc/internals/en/x-protocol-implementation-vectored-i-o.html
 
     my $class = ref($obj);
     my $payload = $class->encode($obj);
