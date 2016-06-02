@@ -16,8 +16,7 @@ use Term::ReadKey;
 # This is how Mysqlx.pm was generated (I think Google::ProtocolBuffers::Generated needs to be installed):
 # The .proto files were from:
 # https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
-# protoc --perl-gpd_out=package=Mysqlx,pb_prefix=Mysqlx,prefix=Mysqlx:lib --proto_path=/home/slanning/xprotocol /home/slanning/xprotocol/*.proto
-# (Note: protoc is too dumb to deal with relative paths)
+# protoc --perl-gpd_out=package=Mysqlx,pb_prefix=Mysqlx,prefix=Mysqlx:lib -I. ./*.proto
 # perl -Ilib -MMysqlx -E 'Mysqlx::Connection::Capability->new'
 use lib "./lib"; use Mysqlx;
 
