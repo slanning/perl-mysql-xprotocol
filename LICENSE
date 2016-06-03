@@ -11,3 +11,5 @@ of merchantability or fitness for a particular purpose.
 The file Mysqlx.pm was generated from the .proto files at
 https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
 Since those are GPL v2, I think that makes Mysqlx.pm GPL v2.
+The .proto files are copied into the proto directory for convenience
+along with a copy of the GPL v2 license.
