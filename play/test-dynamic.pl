@@ -142,6 +142,10 @@ sub crud_find {
         }),
     );
     # This is how you say "WHERE col1 = ?" with bind value 3
+    # https://dev.mysql.com/doc/x-devapi-userguide/en/crud-ebnf-collection-crud-functions.html
+    # https://dev.mysql.com/doc/x-devapi-userguide/en/crud-ebnf-other-definitions.html
+    # mysql-server/rapid/plugin/x/mysqlxtest_src/common/expr_parser.cc ?
+    # mysql-connector-nodejs/lib/Expressions/parser.jison ?
     my $criteria = Mysqlx::Expr::Expr->new({
         type => Mysqlx::Expr::Expr::Type::OPERATOR,
         operator => Mysqlx::Expr::Operator->new({
