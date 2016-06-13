@@ -42,7 +42,10 @@ my %NOTICE_TYPE = (
 # no idea if/where it's documented
 my $EXPECT_NO_ERROR = 1;
 
+# https://dev.mysql.com/doc/dev/connector-nodejs/tutorial-Getting_Started.html
+# FAQ section mentions that PLAIN is supported iff TLS is used
 my $AUTHENTICATION_MECH_NAME = 'MYSQL41';
+
 my $BYTES_FIELD_SEPARATOR = "\0";
 
 my $COMPARE_WITH_OLDSCHOOL = 1;
