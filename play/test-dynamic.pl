@@ -10,6 +10,7 @@ use Digest::SHA1;
 use Dumbbench;
 use Getopt::Long;
 use IO::Socket::INET qw//;
+use IO::Socket::SSL;
 use JSON qw//;
 use Term::ReadKey;
 
@@ -66,10 +67,14 @@ sub main {
     else {
         my $host = $OPT->{hostname}->[0];
         my $sock = make_socket($host, $OPT->{port});
+        my $tls_sock = make_tls_socket($host, $OPT->{port}, { ca_path => '/home/slanning/mysql-5.7.13/data' });
 
+        capabilities_set($tls_sock);
         #capabilities($sock);
-        authenticate_mysql41($sock);
-        stmt_execute($sock);
+        #authenticate_mysql41($sock);
+        authenticate_plain($tls_sock);
+        stmt_execute($tls_sock);
+        #stmt_execute($sock);
         #pipeline($sock);
         #expect($sock);
         #expect_pipeline($sock);
@@ -78,6 +83,7 @@ sub main {
         #crud_update($sock);
         #crud_delete($sock);
 
+        $tls_sock->close();
         $sock->close();
     }
 }
@@ -355,6 +361,18 @@ sub make_socket {
         PeerPort => $port,
         Proto    => 'tcp',
     ) or die "Couldn't create socket: $!";
+    return $sock;
+}
+
+sub make_tls_socket {
+    my ($host, $port, $sslopt) = @_;
+
+    my $sock = IO::Socket::INET->new(
+        PeerHost => $host,
+        PeerPort => $port,
+
+        SSL_ca_path => $sslopt->{ca_path},
+    ) or die "Failed connect or SSL handshake: $!, $SSL_ERROR";
     return $sock;
 }
 
@@ -723,6 +741,58 @@ sub capabilities {
         else {
             die "unhandled message type '$recv->{type}'";
         }
+    }
+}
+
+sub capabilities_set {
+    my ($sock) = @_;
+
+    my %any_type_by_name = reverse %ANY_TYPE;
+    my %scalar_type_by_name = reverse %SCALAR_TYPE;
+
+    my $capabilities = Mysqlx::Connection::Capabilities->new({
+        capabilities => [
+            Mysqlx::Connection::Capability->new({
+                name => 'tls',
+                value => Mysqlx::Datatypes::Any->new({
+                    type => $any_type_by_name{SCALAR},
+                    bool => Mysqlx::Datatypes::Scalar->new({
+                        type => $scalar_type_by_name{V_BOOL},
+                        v_bool => 'true',
+                    }),
+                }),
+            }),
+        ],
+    });
+
+    send_message_payload($sock, 'Mysqlx::Connection::CapabilitiesSet', 'CON_CAPABILITIES_SET', {
+        capabilities => $capabilities,
+    });
+
+    my $recv = receive_message($sock);
+
+    if (server_type_is('CONN_CAPABILITIES', $recv->{type})) {
+        my $cap = decode_payload('Mysqlx::Connection::Capabilities', $recv->{payload});
+        my $capa = $cap->get_capabilities_list();
+        foreach my $capability (@$capa) {
+            my $name = $capability->get_name();
+            my $value = $capability->get_value();
+
+            # FIXME: for some reason, value is randomly missing....
+            my $decoded_value = decode_any($value);
+            print Dumper({ name => $name, decoded_value => decode_any($value) });
+            #printf("name: %s, value: %s\n", $name, $decoded_value->{value}{value}{value}{value});
+            # yay?
+        }
+
+        last;
+    }
+    elsif (server_type_is('ERROR', $recv->{type})) {
+        my $decoded_payload = decode_payload('Mysqlx::Error', $recv->{payload});
+        die "Server error (ERROR): ", Dumper($decoded_payload);
+    }
+    else {
+        die "unhandled message type '$recv->{type}'";
     }
 }
 
@@ -1177,6 +1247,58 @@ sub stmt_execute {
     handle_stmt_execute($sock, 1);
 
     print "done with stmt_execute\n";
+}
+
+sub authenticate_plain {
+    my ($sock) = @_;
+
+    my $auth_data = $BYTES_FIELD_SEPARATOR . $OPT->{username} . $BYTES_FIELD_SEPARATOR . $OPT->{password};
+
+    send_message_payload($sock, 'Mysqlx::Session::AuthenticateStart', 'SESS_AUTHENTICATE_START', {
+        mech_name => 'PLAIN',
+        auth_data => $auth_data,
+    });
+
+    my $response;
+
+  RECV:
+    my $recv = receive_message($sock);
+    if ($recv) {
+        if (server_type_is('SESS_AUTHENTICATE_CONTINUE', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Session::AuthenticateContinue', $recv->{payload});
+
+            $response = _response_to_challenge($decoded_payload->{auth_data}, , $OPT->{database});
+            send_message_payload($sock, 'Mysqlx::Session::AuthenticateContinue', 'SESS_AUTHENTICATE_CONTINUE', {
+                auth_data => $auth_data,
+            });
+
+            goto RECV;
+        }
+        elsif (server_type_is('NOTICE', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Notice::Frame', $recv->{payload});
+            print "Notice frame: ", Dumper($decoded_payload) if $OPT->{debug};
+            my $notice_payload = _decode_notice($decoded_payload);
+            print Dumper($notice_payload) if $OPT->{debug};
+
+            goto RECV;
+        }
+        elsif (server_type_is('SESS_AUTHENTICATE_OK', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Session::AuthenticateOk', $recv->{payload});
+            print "AuthenticateOk: ", Dumper($decoded_payload)
+              if $OPT->{debug};
+        }
+        elsif (server_type_is('ERROR', $recv->{type})) {
+            my $decoded_payload = decode_payload('Mysqlx::Error', $recv->{payload});
+            die "Server error (ERROR): ", Dumper($decoded_payload);
+        }
+        else {
+            die "server message type '$recv->{type}' unknown";
+        }
+    }
+    else {
+        print "didn't recv from socket\n";
+        # retry?
+    }
 }
 
 # is there any way to set the schema
