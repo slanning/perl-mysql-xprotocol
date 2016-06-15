@@ -12,6 +12,7 @@ use Getopt::Long;
 use IO::Socket::INET qw//;
 use IO::Socket::SSL;
 use JSON qw//;
+use Pod::Usage;
 use Term::ReadKey;
 
 # This is how Mysqlx.pm was generated (I think Google::ProtocolBuffers::Generated needs to be installed):
