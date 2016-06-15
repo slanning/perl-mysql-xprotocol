@@ -6,6 +6,7 @@ use strict;
 use warnings;
 use Data::Dumper; { package Data::Dumper; our ($Indent, $Sortkeys, $Terse, $Useqq) = (1)x4 }
 use File::Spec;
+use Time::HiRes qw/gettimeofday/;
 
 # Ugh... (number are from mysqlx.proto , packages inferred manually)
 my %MESSAGE = (
@@ -78,7 +79,13 @@ sub decode_message {
     my $package = $MESSAGE{$self->{endpoint}}{$self->{_type}}
       // die("unhandled type '$self->{_type}'");
 
-    printf("%s: %s\n", uc($self->{endpoint}), $package);
+    my ($sec, $usec) = gettimeofday();
+    my @t = localtime($sec);
+    @t = reverse @t[0..5];
+    $t[0] += 1900;
+    my $time = sprintf("%d-%02d-%02d %02d:%02d:%02d.%06d", @t, $usec);
+
+    printf("%s %s: %s\n", $time,  uc($self->{endpoint}), $package);
 
     my $proto_file = proto_file_for($package);
     my $proto_cmd = sprintf("%s --decode='%s' -I'%s' '%s'",
@@ -92,6 +99,7 @@ sub decode_message {
     my $hex = _bytes_to_hex($self->{_payload});
 
     my $out = `perl -e'print pack("H*", q{$hex})' | $proto_cmd`;
+    $out =~ s/^/  /mg;
     print $out . $/;
 
     $self->reset();
