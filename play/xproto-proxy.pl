@@ -65,6 +65,7 @@ sub new {
         debug        => $p{debug},
         protoc       => $p{protoc},
         proto_dir    => $p{'proto-dir'},
+        add_timestamp => $p{'add-timestamp'},
 
         _bytes     => [],
     }, $class;
@@ -79,13 +80,15 @@ sub decode_message {
     my $package = $MESSAGE{$self->{endpoint}}{$self->{_type}}
       // die("unhandled type '$self->{_type}'");
 
-    my ($sec, $usec) = gettimeofday();
-    my @t = localtime($sec);
-    @t = reverse @t[0..5];
-    $t[0] += 1900;
-    my $time = sprintf("%d-%02d-%02d %02d:%02d:%02d.%06d", @t, $usec);
-
-    printf("%s %s: %s\n", $time,  uc($self->{endpoint}), $package);
+    my $time = '';
+    if ($self->{add_timestamp}) {
+        my ($sec, $usec) = gettimeofday();
+        my @t = localtime($sec);
+        @t = reverse @t[0..5];
+        $t[0] += 1900;
+        $time = sprintf("%d-%02d-%02d %02d:%02d:%02d.%06d", @t, $usec) . ' ';
+    }
+    printf("%s%s: %s\n", $time,  uc($self->{endpoint}), $package);
 
     my $proto_file = proto_file_for($package);
     my $proto_cmd = sprintf("%s --decode='%s' -I'%s' '%s'",
@@ -217,7 +220,7 @@ if (!caller) {
 sub main {
     my $opt = cli_params();
 
-    my @opts = map { $_ => $opt->{$_} } qw/debug protoc proto-dir/;
+    my @opts = map { $_ => $opt->{$_} } qw/debug protoc proto-dir add-timestamp/;
     my $client_decoder = Decoder->new(endpoint => 'client', @opts);
     my $server_decoder = Decoder->new(endpoint => 'server', @opts);
 
@@ -247,6 +250,7 @@ sub cli_params {
     $opt{'connection-type|t'}    = { default => 'tcp',     type => ':s'  };
     $opt{'protoc|p'}             = { default => 'protoc',  type => ':s'  };
     $opt{'proto-dir|d'}          = { default => '.',       type => ':s'  };
+    $opt{'add-timestamp|T'}      = { default => 0,         type => '!'   };
 
     $opt{help}                   = { default => 0,       type => '|?'  };
     $opt{man}                    = { default => 0,       type => ''    };
