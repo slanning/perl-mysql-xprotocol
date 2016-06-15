@@ -1,15 +1,4 @@
 #!/usr/bin/env perl
-# a proxy to put between a MySQL X Protocol client and MySQL server
-# ./xproto-proxy.pl localhost:33059 serverhost:33060
-# mysqlsh -u test_user -h localhost --js -P 33059
-# mysql-js>
-
-use strict;
-use warnings;
-use Data::Dumper; { package Data::Dumper; our ($Indent, $Sortkeys, $Terse, $Useqq) = (1)x4 }
-
-use Net::Proxy;
-
 
 package Decoder;
 
@@ -65,15 +54,16 @@ my %MESSAGE = (
 
 sub new {
     my ($class, %p) = @_;
+
     die "missing param 'endpoint' (can be 'client' or 'server')"
       unless $p{endpoint} and ($p{endpoint} eq 'client' or $p{endpoint} eq 'server');
 
     my $self = bless {
-        debug        => 0,
-        endpoint     => undef, # required: client or server
-        protoc       => 'protoc',
-        proto_dir    => '../proto',
-        %p,
+        endpoint     => $p{endpoint},
+
+        debug        => $p{debug},
+        protoc       => $p{protoc},
+        proto_dir    => $p{'proto-dir'},
 
         _bytes     => [],
     }, $class;
@@ -203,43 +193,38 @@ sub reset {
 
 package main;
 
-my $DEBUG = 0;
+use strict;
+use warnings;
+use Data::Dumper; { package Data::Dumper; our ($Indent, $Sortkeys, $Terse, $Useqq) = (1)x4 }
+use Getopt::Long;
+use Net::Proxy;
+use Pod::Usage;
+
 $|++;
 
 if (!caller) {
-    # $0 proxyhost:proxyport serverhost:serverport
-    main(@ARGV);
+    main();
     exit;
 }
 
 sub main {
-    my ($p, $s) = @_;
-    unless ($p) {
-        print STDERR "usage: $0 proxyhost:proxyport [serverhost:serverport]\n";
-        exit;
-    }
-    my ($phost, $pport) = split(/:/, $p);
-    my ($shost, $sport);
-    if ($s) {
-        ($shost, $sport) = split(/:/, $s);
-    }
-    $shost //= 'localhost';
-    $sport //= 33060;
+    my $opt = cli_params();
 
-    my $client_decoder = Decoder->new(endpoint => 'client', debug => $DEBUG);
-    my $server_decoder = Decoder->new(endpoint => 'server', debug => $DEBUG);
+    my @opts = map { $_ => $opt->{$_} } qw/debug protoc proto-dir/;
+    my $client_decoder = Decoder->new(endpoint => 'client', @opts);
+    my $server_decoder = Decoder->new(endpoint => 'server', @opts);
 
     my $proxy = Net::Proxy->new({
         in => {
-            type => 'tcp',
-            host => $phost,
-            port => $pport,
+            type => $opt->{'connection-type'},
+            host => $opt->{proxyhost},
+            port => $opt->{proxyport},
             hook => sub { $client_decoder->decode(@_) },
         },
         out => {
-            type => 'tcp',
-            host => $shost,
-            port => $sport,
+            type => $opt->{'connection-type'},
+            host => $opt->{serverhost},
+            port => $opt->{serverport},
             hook => sub { $server_decoder->decode(@_) },
         },
     });
@@ -248,6 +233,126 @@ sub main {
     Net::Proxy->mainloop();
 }
 
+sub cli_params {
+    my %opt;
+
+    $opt{'debug|D'}              = { default => 0,         type => '!'   };
+    $opt{'connection-type|t'}    = { default => 'tcp',     type => ':s'  };
+    $opt{'protoc|p'}             = { default => 'protoc',  type => ':s'  };
+    $opt{'proto-dir|d'}          = { default => '.',       type => ':s'  };
+
+    $opt{help}                   = { default => 0,       type => '|?'  };
+    $opt{man}                    = { default => 0,       type => ''    };
+    GetOptions(
+        map {
+            ( "$_$opt{$_}{type}" => \ ($opt{$_} = $opt{$_}{default}) );    # attn: evil
+        } keys %opt
+    ) or pod2usage(2);
+    pod2usage(1) if $opt{help};
+    pod2usage(-exitstatus => 0, -verbose => 2) if $opt{man};
+
+    # get rid of shortcuts
+    my $regex = qr/\|[a-zA-Z]$/;
+    foreach my $key (grep { $_ =~ $regex } keys %opt) {
+        (my $simple_key = $key) =~ s/$regex//;
+        $opt{$simple_key} = delete($opt{$key});
+    }
+
+    my ($p, $s) = @ARGV;   # leftover after flag processing
+    unless ($p) {
+        print STDERR "usage: $0 [options] proxyhost:proxyport [serverhost:serverport]\n";
+        exit;
+    }
+    ($opt{proxyhost}, $opt{proxyport}) = split(/:/, $p);
+
+    ($opt{serverhost}, $opt{serverport}) = split(/:/, $s)
+      if $s;
+    $opt{serverhost} //= 'localhost';
+    $opt{serverport} //= 33060;
+
+    return \%opt;
+}
+
 
 1;
 __END__
+
+=head1 NAME
+
+xproto-proxy.pl - decoding proxy for MySQL's X Protocol
+
+=head1 SYNOPSIS
+
+ xproto-proxy.pl [options] proxyhost:proxyport [serverhost:serverport]
+
+ # in one terminal
+ ./xproto-proxy.pl --proxydir='proto' localhost:33059 yourmysqlserver:33060
+
+ # in another terminal
+ mysqlsh -u test_user -h localhost --js -P 33059
+ mysql-js>
+
+ # back to the proxy to see the decoded messages
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--connection-type> | B<-t>
+
+Type of network connection. Defaults to 'tcp'. (Others are untested.)
+
+=item B<--protoc> | B<-p>
+
+Command to run `protoc`. Defaults to 'protoc'.
+
+=item B<--proto-dir> | B<-d>
+
+Directory holding MySQL's .proto files needed by `protoc`. Defaults to '.'.
+
+=item B<--debug> | B<-D>
+
+Enable debug output.
+
+=item B<--help>
+
+Prints a brief help message and exits.
+
+=item B<--man>
+
+Prints the manual page and exits.
+
+=back
+
+=head1 DESCRIPTION
+
+This proxy sits between a MySQL server and a client using the X Protocol.
+As messages pass from client to server and back, the messages are decoded
+by `protoc` in a human-readable form such as:
+
+ CLIENT: Mysqlx.Connection.CapabilitiesGet
+
+ SERVER: Mysqlx.Connection.Capabilities
+ capabilities {
+  name: "authentication.mechanisms"
+  value {
+    type: ARRAY
+    array {
+      value {
+        type: SCALAR
+        scalar {
+          type: V_STRING
+          v_string {
+            value: "MYSQL41"
+          }
+        }
+      }
+    }
+  }
+ }
+ ....
+
+This way you can debug your own client code, or see how for example mysqlsh
+does certain things.
+
+=cut
