@@ -128,7 +128,6 @@ sub decode {
     while (@$bytes) {
         $self->debug("bytes remaining: " . scalar(@$bytes));
 
-        my $done = 0;
         while ($self->{_len_bytes_remaining}) {
             my $byte = shift(@$bytes);
 
