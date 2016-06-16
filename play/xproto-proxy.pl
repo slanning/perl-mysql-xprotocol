@@ -206,6 +206,7 @@ package main;
 use strict;
 use warnings;
 use Data::Dumper; { package Data::Dumper; our ($Indent, $Sortkeys, $Terse, $Useqq) = (1)x4 }
+use File::Spec;
 use Getopt::Long;
 use Net::Proxy;
 use Pod::Usage;
@@ -246,14 +247,15 @@ sub main {
 sub cli_params {
     my %opt;
 
-    $opt{'debug|D'}              = { default => 0,         type => '!'   };
     $opt{'connection-type|t'}    = { default => 'tcp',     type => ':s'  };
     $opt{'protoc|p'}             = { default => 'protoc',  type => ':s'  };
     $opt{'proto-dir|d'}          = { default => '.',       type => ':s'  };
     $opt{'add-timestamp|T'}      = { default => 0,         type => '!'   };
+    $opt{'forwarding|L'}         = { default => '',        type => ':s'  };
+    $opt{'debug|D'}              = { default => 0,         type => '!'   };
 
-    $opt{help}                   = { default => 0,       type => '|?'  };
-    $opt{man}                    = { default => 0,       type => ''    };
+    $opt{help}                   = { default => 0, type => '|?'  };
+    $opt{man}                    = { default => 0, type => ''    };
     GetOptions(
         map {
             ( "$_$opt{$_}{type}" => \ ($opt{$_} = $opt{$_}{default}) );    # attn: evil
@@ -269,21 +271,46 @@ sub cli_params {
         $opt{$simple_key} = delete($opt{$key});
     }
 
-    my ($p, $s) = @ARGV;   # leftover after flag processing
-    unless ($p) {
-        print STDERR "usage: $0 [options] proxyhost:proxyport [serverhost:serverport]\n";
-        exit;
+    if ($opt{forwarding}) {
+        # [bind_address:] port:host:hostport
+        my @a = split(/:/, delete($opt{forwarding}));
+        @a && ($opt{$_} = pop(@a))
+          for qw/serverport serverhost proxyport proxyhost/;
     }
-    ($opt{proxyhost}, $opt{proxyport}) = split(/:/, $p);
+    else {
+        my ($p, $s) = @ARGV;   # leftover after flag processing
+        unless ($p) {
+            print STDERR "usage: $0 [options] proxyhost:proxyport [serverhost:serverport]\n";
+            exit;
+        }
+        ($opt{proxyhost}, $opt{proxyport}) = split(/:/, $p);
 
-    ($opt{serverhost}, $opt{serverport}) = split(/:/, $s)
-      if $s;
+        ($opt{serverhost}, $opt{serverport}) = split(/:/, $s)
+          if $s;
+    }
+
+    $opt{proxyhost}  //= 'localhost';
+    $opt{proxyport}  //= 33059;
     $opt{serverhost} //= 'localhost';
     $opt{serverport} //= 33060;
+
+    # sanity checks
+    _protodir_looks_reasonable($opt{'proto-dir'});
 
     return \%opt;
 }
 
+sub _protodir_looks_reasonable {
+    my ($dir) = @_;
+    my $absdir = File::Spec->rel2abs($dir);
+
+    opendir(my $dh, $absdir) || die("Error opening '$absdir': $!");
+    my @proto = grep {
+        -f File::Spec->catfile($absdir, $_) && /\Amysqlx.*\.proto\z/;
+    } readdir($dh);
+    closedir($dh);
+    die("--proto-dir '$absdir' doesn't contain .proto files") unless @proto;
+}
 
 1;
 __END__
@@ -307,6 +334,9 @@ xproto-proxy.pl - decoding proxy for MySQL's X Protocol
 
 =head1 OPTIONS
 
+Defaults for server hosts are 'localhost' and default ports are
+server: 33060 and proxy: 33059
+
 =over 4
 
 =item B<--connection-type> | B<-t>
@@ -320,6 +350,15 @@ Command to run `protoc`. Defaults to 'protoc'.
 =item B<--proto-dir> | B<-d>
 
 Directory holding MySQL's .proto files needed by `protoc`. Defaults to '.'.
+
+=item B<--add-timestamp> | B<-T>
+
+Prepend a timestamp to each message header. Defaults to false.
+
+=item B<--forwarding> | B<-L>
+
+For consistency with `ssh -L [bind_address:] port:host:hostport`, this parameter
+can replace "proxyhost:proxyport [serverhost:serverport]".
 
 =item B<--debug> | B<-D>
 
