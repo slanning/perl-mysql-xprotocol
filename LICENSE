@@ -1,6 +1,7 @@
 Copyright Scott Lanning 2016. This library is free software;
-you can redistribute it and/or modify it under the same terms
-as Perl itself (which is the Artistic license, or GPL v1 or above).
+you can distribute it and/or modify it under the
+GNU General Public License as published by the
+Free Software Foundation; version 2 of the License.
 
 This code is distributed in the hope that it will be useful,
 but without any warranty; without even the implied warranty
@@ -8,8 +9,15 @@ of merchantability or fitness for a particular purpose.
 
 -
 
+Normally I distribute CPAN code "under the same license as Perl itself",
+which includes the choice of the Artistic License. However, since a lot
+of this code is generated from or derived from GPL v2 code,
+I think it's better/safer to assume it's GPL v2.
+
 The file Mysqlx.pm was generated from the .proto files at
 https://github.com/mysql/mysql-server/tree/5.7/rapid/plugin/x/protocol
-Since those are GPL v2, I think that makes Mysqlx.pm GPL v2.
+
 The .proto files are copied into the proto directory for convenience
 along with a copy of the GPL v2 license.
+
+Some other code is derived from https://github.com/mysql/mysql-connector-nodejs
