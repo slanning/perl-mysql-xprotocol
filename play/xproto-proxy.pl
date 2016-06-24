@@ -225,18 +225,27 @@ sub main {
     my $client_decoder = Decoder->new(endpoint => 'client', @opts);
     my $server_decoder = Decoder->new(endpoint => 'server', @opts);
 
+    # N.B. SSL isn't working yet
+    my %ssl_args = (
+        ($opt->{'ssl-key'}  ? (SSL_key_file  => $opt->{'ssl-key'} ) : ()),
+        ($opt->{'ssl-cert'} ? (SSL_cert_file => $opt->{'ssl-cert'}) : ()),
+        ($opt->{'ssl-ca'}   ? (SSL_ca_file   => $opt->{'ssl-ca'}  ) : ()),
+    );
+
     my $proxy = Net::Proxy->new({
         in => {
-            type => $opt->{'connection-type'},
+            type => $opt->{_connection_type},
             host => $opt->{proxyhost},
             port => $opt->{proxyport},
             hook => sub { $client_decoder->decode(@_) },
+            %ssl_args,
         },
         out => {
-            type => $opt->{'connection-type'},
+            type => $opt->{_connection_type},
             host => $opt->{serverhost},
             port => $opt->{serverport},
             hook => sub { $server_decoder->decode(@_) },
+            %ssl_args,
         },
     });
     $proxy->register();
@@ -247,11 +256,15 @@ sub main {
 sub cli_params {
     my %opt;
 
-    $opt{'connection-type|t'}    = { default => 'tcp',     type => ':s'  };
     $opt{'protoc|p'}             = { default => 'protoc',  type => ':s'  };
     $opt{'proto-dir|d'}          = { default => '.',       type => ':s'  };
     $opt{'add-timestamp|T'}      = { default => 0,         type => '!'   };
     $opt{'forwarding|L'}         = { default => '',        type => ':s'  };
+
+    $opt{'ssl-key'}              = { default => '',        type => ':s'  };
+    $opt{'ssl-cert'}             = { default => '',        type => ':s'  };
+    $opt{'ssl-ca'}               = { default => '',        type => ':s'  };
+
     $opt{'debug|D'}              = { default => 0,         type => '!'   };
 
     $opt{help}                   = { default => 0, type => '|?'  };
@@ -296,6 +309,9 @@ sub cli_params {
 
     # sanity checks
     _protodir_looks_reasonable($opt{'proto-dir'});
+    my $using_ssl = _ssl_looks_reasonable(\%opt);
+
+    $opt{'_connection_type'} = $using_ssl ? 'ssl' : 'tcp';
 
     return \%opt;
 }
@@ -310,6 +326,25 @@ sub _protodir_looks_reasonable {
     } readdir($dh);
     closedir($dh);
     die("--proto-dir '$absdir' doesn't contain .proto files") unless @proto;
+}
+
+sub _ssl_looks_reasonable {
+    my ($opt) = @_;
+
+    my $num_ssl_args = 0;
+    foreach my $arg (qw/ssl-key ssl-cert ssl-ca/) {
+        next unless $opt->{$arg};
+
+        my $file = File::Spec->rel2abs($opt->{$arg});
+        die("--$arg '$file' isn't readable") unless -r $file;
+
+        ++$num_ssl_args;
+    }
+
+    #die("All three --ssl-* args are required for using SSL/TLS")
+    #  unless $num_ssl_args == 0 or $num_ssl_args == 3;
+
+    return $num_ssl_args;
 }
 
 1;
@@ -339,10 +374,6 @@ server: 33060 and proxy: 33059
 
 =over 4
 
-=item B<--connection-type> | B<-t>
-
-Type of network connection. Defaults to 'tcp'. (Others are untested.)
-
 =item B<--protoc> | B<-p>
 
 Command to run `protoc`. Defaults to 'protoc'.
@@ -359,6 +390,18 @@ Prepend a timestamp to each message header. Defaults to false.
 
 For consistency with `ssh -L [bind_address:] port:host:hostport`, this parameter
 can replace "proxyhost:proxyport [serverhost:serverport]".
+
+=item B<--ssl-key>
+
+B<NOT WORKING>: SSL client key file. Defaults to not using SSL.
+
+=item B<--ssl-cert>
+
+B<NOT WORKING>: SSL client certificate file. Defaults to not using SSL.
+
+=item B<--ssl-ca>
+
+B<NOT WORKING>: SSL CA file. Defaults to not using SSL.
 
 =item B<--debug> | B<-D>
 
